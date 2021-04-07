@@ -1,0 +1,6 @@
+{
+    "configuration": "cpu=16MHzatmega168",
+    "board": "arduino:avr:pro",
+    "sketch": "rc_car_receiver.ino",
+    "port": "COM16"
+}
