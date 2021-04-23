@@ -1,3 +1,4 @@
+#include "Arduino.h"
 #include <SPI.h>
 #include <RF24.h>
 
@@ -10,7 +11,9 @@
 #define PIN_PWM_1 9
 #define PIN_PWM_2 10
 
-#define DEAD_ZONE 20
+#define DEAD_ZONE 10
+#define MAX_SPEED_PWM 255
+#define MAX_STEERING_PWM 200
 #define FWD 1
 #define BWD 2
 #define LEFT 1
@@ -116,7 +119,10 @@ void radioConfig()
 void readRadio()
 {
 	if (radio.available())
-	{				
+	{	
+        radioDataReceive last_message;
+        if (machine_state.empty_receive_data == 0)		
+            last_message = message_receive;
 		radio.read(&message_receive, sizeof(message_receive));
 		if (map(message_receive.potentiometer, 0, 255, 0, 100) > 20)
 			machine_state.velocity_limit = float(map(message_receive.potentiometer, 0, 255, 0, 255));
@@ -136,7 +142,13 @@ void readRadio()
 
 void printRadio()
 {
-    Serial.print(machine_state.radio_print_counter);
+    if (machine_state.radio_print_counter < 10)
+        Serial.print("  ");
+
+    if (machine_state.radio_print_counter >= 10 && machine_state.radio_print_counter < 100)
+        Serial.print(" ");
+
+    Serial.print(machine_state.radio_print_counter);    
     Serial.print(". ");
     Serial.print(message_receive.analog_left_Y);
     Serial.print(" ");
@@ -151,6 +163,12 @@ void printRadio()
 
 void printSpeed()
 {
+    if (machine_state.radio_print_counter < 10)
+        Serial.print("  ");
+
+    if (machine_state.radio_print_counter >= 10 && machine_state.radio_print_counter < 100)
+        Serial.print(" ");
+
     Serial.print(machine_state.radio_print_counter);
     Serial.print(". ");
     Serial.print(machine_state.speed);
@@ -167,19 +185,26 @@ void printSpeed()
 void controlMotors()
 {
     // SPEED
+    float speed_before_scaling;
 
     if (message_receive.analog_left_Y > 127 + DEAD_ZONE)
         {
-            machine_state.speed = map(message_receive.analog_left_Y, 127 + DEAD_ZONE , 255, 0, 255);
+            speed_before_scaling = map(message_receive.analog_left_Y, 127 + DEAD_ZONE , 255, 0, MAX_SPEED_PWM);
+            // machine_state.speed = map(message_receive.analog_left_Y, 127 + DEAD_ZONE , 255, 0, MAX_SPEED_PWM);
+            speed_before_scaling = speed_before_scaling *( (float)message_receive.potentiometer - 10) / 245.0;
+            machine_state.speed = (uint8_t) speed_before_scaling;
             machine_state.speed_direction = FWD;
         }
     if (message_receive.analog_left_Y < 127 - DEAD_ZONE)
         {
-            machine_state.speed = map(message_receive.analog_left_Y, 0, 127 - DEAD_ZONE , 255, 0);
+            // machine_state.speed = map(message_receive.analog_left_Y, 0, 127 - DEAD_ZONE , MAX_SPEED_PWM, 0);
+            speed_before_scaling = map(message_receive.analog_left_Y, 0, 127 - DEAD_ZONE , MAX_SPEED_PWM, 0);
+            speed_before_scaling = speed_before_scaling *( (float)message_receive.potentiometer - 10) / 245.0;
+            machine_state.speed = (uint8_t) speed_before_scaling;
             machine_state.speed_direction = BWD;
         }
 
-    if (message_receive.analog_left_Y > 127 - DEAD_ZONE && message_receive.analog_left_Y < 127 + DEAD_ZONE)
+    if (message_receive.analog_left_Y > 127 - DEAD_ZONE && message_receive.analog_left_Y < 127 + DEAD_ZONE || message_receive.potentiometer < 10)
         {
             machine_state.speed = 0;
             machine_state.speed_direction = FWD;
@@ -189,22 +214,43 @@ void controlMotors()
 
     if (message_receive.analog_right_X > 127 + DEAD_ZONE)
         {
-            machine_state.steering = map(message_receive.analog_right_X, 127 + DEAD_ZONE , 255, 0, 255);
-            machine_state.steering_direction = RIGHT;
+            machine_state.steering = map(message_receive.analog_right_X, 127 + DEAD_ZONE , 255, 0, MAX_STEERING_PWM);
+            machine_state.steering_direction = LEFT;
         }
     if (message_receive.analog_right_X < 127 - DEAD_ZONE)
         {
-            machine_state.steering = map(message_receive.analog_right_X, 0, 127 - DEAD_ZONE , 255, 0);
-            machine_state.steering_direction = LEFT;
+            machine_state.steering = map(message_receive.analog_right_X, 0, 127 - DEAD_ZONE , MAX_STEERING_PWM, 0);
+            machine_state.steering_direction = RIGHT;
         }
 
     if (message_receive.analog_right_X > 127 - DEAD_ZONE && message_receive.analog_right_X < 127 + DEAD_ZONE)
         {
             machine_state.steering = 0;
             machine_state.steering_direction = LEFT;
-        }
+        }    
 
     printSpeed();
+}
+
+void driveOutputs()
+{
+    if (machine_state.speed_direction == FWD)
+    {
+        SpeedMotor.forward(machine_state.speed, machine_state.speed > 0);
+    }
+    else if (machine_state.speed_direction == BWD)
+    {
+        SpeedMotor.backward(machine_state.speed, machine_state.speed > 0);
+    }
+
+    if (machine_state.steering_direction == LEFT)
+    {
+        SteeringMotor.forward(machine_state.steering, machine_state.steering > 0);
+    }
+    else if (machine_state.steering_direction == RIGHT)
+    {
+        SteeringMotor.backward(machine_state.steering, machine_state.steering > 0);
+    }
 }
 
 void setup()
@@ -217,4 +263,5 @@ void setup()
 void loop()
 {
     readRadio(); 
+    driveOutputs();
 }
