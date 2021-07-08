@@ -2,14 +2,20 @@
 #include <SPI.h>
 #include <RF24.h>
 
-#define PIN_PWM_2_CONTROL_2 3
+//RF24
 #define PIN_CE 4
 #define PIN_CSN 5
-#define PIN_PWM_1_CONTROL_1 6
-#define PIN_PWM_1_CONTROL_2 7
-#define PIN_PWM_2_CONTROL_1 8
-#define PIN_PWM_1 9
-#define PIN_PWM_2 10
+
+//DC motor controller
+#define PIN_PWM_A 10
+#define PIN_AIN1 7
+#define PIN_AIN2 6
+
+
+#define PIN_PWM_B 9
+#define PIN_BIN1 8
+#define PIN_BIN2 3
+
 
 #define DEAD_ZONE 10
 #define MAX_SPEED_PWM 255
@@ -37,6 +43,7 @@ struct radioDataReceive {
 struct machineState {
     float velocity_limit;
     uint8_t empty_receive_data;
+    uint8_t empty_messages;
     uint8_t radio_print_counter;
     uint8_t speed;
     uint8_t speed_direction;
@@ -100,10 +107,10 @@ const byte txAddr[6] = { '1','N','o','d','e','2' };
 radioDataReceive message_receive;
 machineState machine_state;
 
-Motor SpeedMotor(PIN_PWM_1_CONTROL_1, PIN_PWM_1_CONTROL_2, PIN_PWM_1);
-Motor SteeringMotor(PIN_PWM_2_CONTROL_1, PIN_PWM_2_CONTROL_2, PIN_PWM_2);
+Motor SpeedMotor(PIN_AIN1, PIN_AIN2, PIN_PWM_A);
+Motor SteeringMotor(PIN_BIN1, PIN_BIN2, PIN_PWM_B);
 
-unsigned long long now;
+unsigned long long now, last_radio_receive;
 
 void radioConfig()
 {
@@ -119,6 +126,7 @@ void radioConfig()
 void readRadio()
 {
 	if (radio.available())
+    last_radio_receive = now;
 	{	
         radioDataReceive last_message;
         if (machine_state.empty_receive_data == 0)		
@@ -128,37 +136,28 @@ void readRadio()
 			machine_state.velocity_limit = float(map(message_receive.potentiometer, 0, 255, 0, 255));
 		else
 			machine_state.velocity_limit = 0.0;
-        
-        // printRadio();
+
+        if ((message_receive.analog_left_Y == 0 && message_receive.analog_left_X == 0 &&
+            message_receive.analog_right_X == 0 && message_receive.analog_right_Y == 0) || 
+            (message_receive.analog_left_Y == 255 && message_receive.analog_left_X == 255 &&
+            message_receive.analog_right_X == 255 && message_receive.analog_right_Y == 255))
+        {
+            machine_state.empty_receive_data = 1;
+            machine_state.empty_messages++;
+            if (machine_state.empty_messages < 10)
+            {
+                message_receive = last_message;
+            }
+        }
+        else
+        {
+            machine_state.empty_receive_data = 0;
+            machine_state.empty_messages = 0;
+        }
         controlMotors();
-        delay(10);
+        //delay(10);
 	}
-	if (message_receive.analog_left_Y == 0 && message_receive.analog_left_X &&
-		message_receive.analog_right_X == 0 & message_receive.analog_right_Y == 0)
-		machine_state.empty_receive_data = 1;
-	else
-		machine_state.empty_receive_data = 0;
-}
 
-void printRadio()
-{
-    if (machine_state.radio_print_counter < 10)
-        Serial.print("  ");
-
-    if (machine_state.radio_print_counter >= 10 && machine_state.radio_print_counter < 100)
-        Serial.print(" ");
-
-    Serial.print(machine_state.radio_print_counter);    
-    Serial.print(". ");
-    Serial.print(message_receive.analog_left_Y);
-    Serial.print(" ");
-    Serial.print(message_receive.analog_left_X);
-    Serial.print(" ");
-    Serial.print(message_receive.analog_right_Y);
-    Serial.print(" ");
-    Serial.print(message_receive.analog_right_X);
-    Serial.print("\n");  
-    machine_state.radio_print_counter++;  
 }
 
 void printSpeed()
@@ -178,6 +177,16 @@ void printSpeed()
     Serial.print(machine_state.steering);
     Serial.print(" ");
     Serial.print(machine_state.steering_direction);
+    Serial.print("\t");
+    Serial.print(message_receive.analog_left_Y);
+    Serial.print(" ");
+    Serial.print(message_receive.analog_right_X);
+    Serial.print(" ");
+    Serial.print(message_receive.message_no);
+    Serial.print(" ");
+    Serial.print(machine_state.empty_receive_data);
+    Serial.print(" ");
+    Serial.print(machine_state.empty_messages);
     Serial.print("\n");
     machine_state.radio_print_counter++;  
 }
@@ -262,6 +271,18 @@ void setup()
 
 void loop()
 {
+    now = millis();
     readRadio(); 
-    driveOutputs();
+    if(now - last_radio_receive < 1000)
+        driveOutputs();
+    else
+    {
+        SteeringMotor.stop();
+        SpeedMotor.stop();
+        Serial.println("Radio failure!");
+        radioConfig();
+        delay(20);
+        radio.flush_rx()
+    }
+    delay(1);
 }
